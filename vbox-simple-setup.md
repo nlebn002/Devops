@@ -99,6 +99,12 @@ On your host machine:
 ```bash
 ssh-keygen -t ed25519 -C "your-email@example.com"
 ssh-copy-id nik@192.168.x.x
+OR
+
+mkdir -p ~/.ssh   #-p = don’t fail if it already exists
+chmod 700 ~/.ssh    #Set strict permissions on the folder -> 700 = owner can read/write/execute, others = no access
+nano ~/.ssh/authorized_keys # Open (or create) file where allowed public keys are stored and paste public ssh here
+chmod 600 ~/.ssh/authorized_keys #600 = owner read/write, no one else
 ```
 
 On the VM, harden SSH:
