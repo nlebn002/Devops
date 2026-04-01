@@ -1,11 +1,21 @@
-# Ubuntu VM Setup For This Project - Short HTTPS Version
+# Ubuntu VM Setup For This Project - Short HTTPS Version With Real Domain
 
 This guide assumes:
 
 - The VirtualBox VM already exists.
 - The VM already uses a `Bridged Adapter`.
 - Ubuntu Server `24.04 LTS` will be installed.
-- You want Nginx to serve HTTPS on port `443`.
+- You have a real domain name.
+- Your domain points to the VM IP address.
+- You want Nginx to serve HTTPS on port `443` with Let's Encrypt.
+
+Example domain used below:
+
+```text
+shop.example.com
+```
+
+Replace it with your real domain.
 
 ---
 
@@ -77,7 +87,7 @@ fresh-ubuntu-24
 # Step 4 - Install Base Packages
 
 ```bash
-sudo apt install -y ca-certificates curl git jq unzip vim ufw fail2ban htop ncdu openssl
+sudo apt install -y ca-certificates curl git jq unzip vim ufw fail2ban htop ncdu
 ```
 
 ---
@@ -153,7 +163,6 @@ docker ps
 sudo mkdir -p /opt/ecommerce
 sudo mkdir -p /etc/ecommerce
 sudo mkdir -p /var/log/ecommerce
-sudo mkdir -p /etc/nginx/ssl
 sudo chown -R $USER:$USER /opt/ecommerce /etc/ecommerce /var/log/ecommerce
 ```
 
@@ -208,10 +217,10 @@ curl http://localhost:5010/health/ready
 
 ---
 
-# Step 12 - Install Nginx
+# Step 12 - Install Nginx And Certbot
 
 ```bash
-sudo apt install -y nginx
+sudo apt install -y nginx certbot python3-certbot-nginx
 sudo systemctl enable --now nginx
 sudo systemctl status nginx
 ```
@@ -225,42 +234,32 @@ sudo ufw status
 
 ---
 
-# Step 13 - Create A Self-Signed HTTPS Certificate
+# Step 13 - Check The Domain Before Certificates
 
-If you do not have a real domain name and you are testing inside VirtualBox, use a self-signed certificate.
+Your domain must already point to the VM IP address.
 
-Create the certificate and private key:
-
-```bash
-sudo mkdir -p /etc/nginx/ssl
-sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/nginx/ssl/ecommerce.key -out /etc/nginx/ssl/ecommerce.crt
-```
-
-When OpenSSL asks questions:
-
-- `Country Name`: your country code, for example `CZ`
-- `State or Province Name`: your region
-- `Locality Name`: your city
-- `Organization Name`: your name or company
-- `Organizational Unit Name`: optional
-- `Common Name`: the VM IP address or hostname, for example `192.168.1.50`
-- `Email Address`: optional
-
-Check the files:
+From the VM, check the public IP:
 
 ```bash
-ls -l /etc/nginx/ssl
+curl ifconfig.me
 ```
+
+From your host machine, check the domain:
+
+```bash
+nslookup shop.example.com
+```
+
+The domain should resolve to the VM public IP.
 
 Important:
 
-- `/etc/nginx/ssl/ecommerce.key` is the private key. Keep it secret.
-- `/etc/nginx/ssl/ecommerce.crt` is the certificate.
-- Browsers will show a warning because this certificate is self-signed. That is normal in a lab.
+- Let's Encrypt will not work if the domain does not point to this server.
+- Port `80` must be reachable from the internet during certificate creation.
 
 ---
 
-# Step 14 - Configure Nginx For HTTPS On Port 443
+# Step 14 - Create A Temporary Nginx Site On Port 80
 
 Create the site config:
 
@@ -273,16 +272,7 @@ Paste:
 ```nginx
 server {
     listen 80;
-    server_name _;
-    return 301 https://$host$request_uri;
-}
-
-server {
-    listen 443 ssl;
-    server_name _;
-
-    ssl_certificate /etc/nginx/ssl/ecommerce.crt;
-    ssl_certificate_key /etc/nginx/ssl/ecommerce.key;
+    server_name shop.example.com;
 
     location / {
         proxy_pass http://127.0.0.1:5010;
@@ -304,45 +294,75 @@ sudo nginx -t
 sudo systemctl restart nginx
 ```
 
-Test locally:
+Test:
 
 ```bash
-curl -k https://localhost
+curl http://localhost
+curl http://shop.example.com
 ```
 
-Test from your host machine:
-
-```bash
-curl -k https://192.168.x.x
-```
-
-Replace the IP with your real VM IP.
-
-Why `-k` is used:
-
-- `curl` normally rejects self-signed certificates.
-- `-k` tells `curl` to allow it for testing.
+Replace `shop.example.com` with your real domain.
 
 ---
 
-# Step 15 - Open The Site In A Browser
+# Step 15 - Create The HTTPS Certificate With Let's Encrypt
 
-Open:
+Run:
+
+```bash
+sudo certbot --nginx -d shop.example.com
+```
+
+What Certbot will ask:
+
+1. Your email address
+2. Whether you agree to the Let's Encrypt terms
+3. Whether you want to share your email with EFF
+4. Whether to redirect HTTP to HTTPS
+
+Choose the redirect option when asked.
+
+If you also use `www`, include both names:
+
+```bash
+sudo certbot --nginx -d shop.example.com -d www.shop.example.com
+```
+
+After success, test:
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+curl https://shop.example.com
+```
+
+Open it in the browser:
 
 ```text
-https://192.168.x.x
+https://shop.example.com
 ```
-
-If the browser shows a warning:
-
-1. Open the advanced details.
-2. Confirm that you want to continue.
-
-That warning is expected for a self-signed certificate.
 
 ---
 
-# Step 16 - Reboot Test
+# Step 16 - Check Automatic Renewal
+
+Test renewal:
+
+```bash
+sudo certbot renew --dry-run
+```
+
+Check the renewal timer:
+
+```bash
+systemctl status certbot.timer
+```
+
+If the timer is active, renewal is configured.
+
+---
+
+# Step 17 - Reboot Test
 
 ```bash
 sudo reboot
@@ -354,13 +374,13 @@ After reboot:
 systemctl status docker
 systemctl status nginx
 docker ps
-curl -k https://localhost
+curl https://shop.example.com
 curl http://localhost:5010/health/ready
 ```
 
 ---
 
-# Step 17 - Daily Commands
+# Step 18 - Daily Commands
 
 ```bash
 docker compose ps
@@ -371,6 +391,7 @@ free -h
 ss -tulpn
 journalctl -xeu docker
 journalctl -xeu nginx
+journalctl -u certbot
 ```
 
 ---
@@ -395,6 +416,19 @@ Do not expose unless needed:
 
 ---
 
-# Later With A Real Domain
+# If Certbot Fails
 
-If you later get a real public domain name, you can replace the self-signed certificate with a Let's Encrypt certificate. For this short guide, self-signed HTTPS is the simplest way to get port `443` working now.
+Check:
+
+1. The domain points to the correct server.
+2. Port `80` is open.
+3. Nginx is running.
+4. The domain is public, not only local LAN DNS.
+
+Useful commands:
+
+```bash
+sudo nginx -t
+sudo systemctl status nginx
+sudo certbot certificates
+```
