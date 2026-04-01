@@ -128,6 +128,12 @@ Restart SSH:
 sudo systemctl restart ssh
 ```
 
+Important:
+
+- Before you close your current session, open a new SSH session and make sure key login works.
+- If you disable password login before testing your key, you can lock yourself out.
+- To connect to the server use `ssh -i C:\Users\nik\.ssh\alzassh nik@192.168.0.192`
+
 ---
 
 # Step 6 - Configure Firewall And Fail2ban
