@@ -174,7 +174,7 @@ Option A:
 
 ```bash
 cd /opt
-git clone <your-repo-url> ecommerce
+git clone https://github.com/nlebn002/Ecommerce.git ecommerce
 cd /opt/ecommerce
 ```
 
