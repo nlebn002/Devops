@@ -1,0 +1,40 @@
+name: deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to deploy to
+        type: environment
+        required: true
+      branch:
+        description: Branch to deploy
+        required: true
+        default: master
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Configure SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "${{ secrets.SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+
+      - name: Deploy
+        env:
+          DEPLOY_BRANCH: ${{ inputs.branch }}
+        run: |
+          ssh -p "${{ secrets.SSH_PORT }}" "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" "
+            set -euo pipefail
+            cd ${{ vars.DEPLOY_PATH }}
+            git fetch origin ${DEPLOY_BRANCH}
+            git checkout -B ${DEPLOY_BRANCH} origin/${DEPLOY_BRANCH}
+            docker compose \
+              -f \"${{ vars.COMPOSE_FILE }}\" \
+              up -d --build
+          "
