@@ -1,0 +1,319 @@
+---
+- name: Configure Ubuntu VM like ubuntu-signle-vm-old.bash
+  hosts: ubuntu_servers
+  become: true
+  vars:
+    docker_gpg_key_path: /etc/apt/keyrings/docker.asc
+    docker_repo_arch_map:
+      x86_64: amd64
+      aarch64: arm64
+    docker_repo_arch: "{{ docker_repo_arch_map.get(ansible_architecture, ansible_architecture) }}"
+  handlers:
+    - name: restart ssh
+      ansible.builtin.service:
+        name: ssh
+        state: restarted
+
+    - name: restart fail2ban
+      ansible.builtin.service:
+        name: fail2ban
+        state: restarted
+
+    - name: restart nginx container
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ nginx_compose_file }}"
+          - up
+          - -d
+      changed_when: true
+
+  tasks:
+    - name: Update apt cache and upgrade packages
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: dist
+        cache_valid_time: 3600
+
+    - name: Install base packages
+      ansible.builtin.apt:
+        name: "{{ base_packages }}"
+        state: present
+
+    - name: Ensure SSH service is enabled
+      ansible.builtin.service:
+        name: ssh
+        enabled: true
+        state: started
+
+    - name: Ensure deploy user exists
+      ansible.builtin.user:
+        name: "{{ deploy_user }}"
+        shell: /bin/bash
+        create_home: true
+        groups: sudo
+        append: true
+
+    - name: Ensure deploy user SSH directory exists
+      ansible.builtin.file:
+        path: "{{ deploy_user_home }}/.ssh"
+        state: directory
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+        mode: "0700"
+
+    - name: Add SSH authorized key for deploy user
+      ansible.posix.authorized_key:
+        user: "{{ deploy_user }}"
+        state: present
+        key: "{{ ssh_pubkey }}"
+
+    - name: Ensure deploy user authorized_keys permissions
+      ansible.builtin.file:
+        path: "{{ deploy_user_home }}/.ssh/authorized_keys"
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+        mode: "0600"
+
+    - name: Back up sshd_config once
+      ansible.builtin.copy:
+        src: /etc/ssh/sshd_config
+        remote_src: true
+        dest: /etc/ssh/sshd_config.bak
+        force: false
+        mode: preserve
+
+    - name: Render hardened sshd_config
+      ansible.builtin.template:
+        src: templates/sshd_config.j2
+        dest: /etc/ssh/sshd_config
+        owner: root
+        group: root
+        mode: "0644"
+        validate: /usr/sbin/sshd -t -f %s
+      notify: restart ssh
+
+    - name: Ensure apt keyrings directory exists
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Download Docker apt GPG key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: "{{ docker_gpg_key_path }}"
+        mode: "0644"
+
+    - name: Add Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: "deb [arch={{ docker_repo_arch }} signed-by={{ docker_gpg_key_path }}] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        filename: docker
+        state: present
+        update_cache: true
+
+    - name: Install Docker packages
+      ansible.builtin.apt:
+        name: "{{ docker_packages }}"
+        state: present
+
+    - name: Ensure container services are enabled
+      ansible.builtin.service:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop:
+        - docker
+        - containerd
+
+    - name: Add deploy user to docker group
+      ansible.builtin.user:
+        name: "{{ deploy_user }}"
+        groups: docker
+        append: true
+
+    - name: Ensure application directory exists
+      ansible.builtin.file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+        mode: "0755"
+
+    - name: Ensure application env file exists
+      ansible.builtin.file:
+        path: "{{ app_env_file }}"
+        state: touch
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+        mode: "0600"
+
+    - name: Reset UFW before applying rules
+      ansible.builtin.command: ufw --force reset
+      changed_when: true
+
+    - name: Set UFW default incoming policy
+      ansible.builtin.command: ufw default deny incoming
+      changed_when: true
+
+    - name: Set UFW default outgoing policy
+      ansible.builtin.command: ufw default allow outgoing
+      changed_when: true
+
+    - name: Allow required firewall ports
+      ansible.builtin.command: "ufw allow {{ item }}"
+      loop:
+        - "{{ ssh_port }}/tcp"
+        - 80/tcp
+        - 443/tcp
+      changed_when: true
+
+    - name: Enable UFW
+      ansible.builtin.command: ufw --force enable
+      changed_when: true
+
+    - name: Render fail2ban jail.local
+      ansible.builtin.template:
+        src: templates/jail.local.j2
+        dest: /etc/fail2ban/jail.local
+        owner: root
+        group: root
+        mode: "0644"
+      notify: restart fail2ban
+
+    - name: Ensure fail2ban service is enabled
+      ansible.builtin.service:
+        name: fail2ban
+        enabled: true
+        state: started
+
+    - name: Ensure nginx directories exist
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner | default('root') }}"
+        group: "{{ item.group | default('root') }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ nginx_dir }}", mode: "0755" }
+        - { path: "{{ nginx_conf_dir }}", mode: "0755" }
+        - { path: "{{ nginx_webroot_dir }}", mode: "0755" }
+        - { path: "{{ nginx_certbot_conf_dir }}", mode: "0755" }
+
+    - name: Check whether a LetsEncrypt certificate already exists
+      ansible.builtin.stat:
+        path: "{{ nginx_certbot_conf_dir }}/live/{{ domain }}/fullchain.pem"
+      register: nginx_certificate_before
+
+    - name: Render nginx site
+      ansible.builtin.template:
+        src: templates/nginx_myapp.conf.j2
+        dest: "{{ nginx_conf_dir }}/myapp.conf"
+        owner: root
+        group: root
+        mode: "0644"
+      vars:
+        nginx_tls_enabled: "{{ nginx_certificate_before.stat.exists }}"
+      notify: restart nginx container
+
+    - name: Render nginx compose file
+      ansible.builtin.template:
+        src: templates/nginx-compose.yml.j2
+        dest: "{{ nginx_compose_file }}"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: restart nginx container
+
+    - name: Start nginx container
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ nginx_compose_file }}"
+          - up
+          - -d
+      changed_when: true
+
+    - name: Issue LetsEncrypt certificate with webroot when requested
+      ansible.builtin.command:
+        argv:
+          - certbot
+          - certonly
+          - --webroot
+          - -w
+          - "{{ nginx_webroot_dir }}"
+          - --non-interactive
+          - --agree-tos
+          - -m
+          - "{{ letsencrypt_email }}"
+          - -d
+          - "{{ domain }}"
+      when: install_cert | bool
+      changed_when: true
+
+    - name: Check whether a LetsEncrypt certificate exists after certbot
+      ansible.builtin.stat:
+        path: "{{ nginx_certbot_conf_dir }}/live/{{ domain }}/fullchain.pem"
+      register: nginx_certificate_after
+
+    - name: Render nginx site after certificate step
+      ansible.builtin.template:
+        src: templates/nginx_myapp.conf.j2
+        dest: "{{ nginx_conf_dir }}/myapp.conf"
+        owner: root
+        group: root
+        mode: "0644"
+      vars:
+        nginx_tls_enabled: "{{ nginx_certificate_after.stat.exists }}"
+      notify: restart nginx container
+
+    - name: Flush handlers so nginx is running with the latest config
+      ansible.builtin.meta: flush_handlers
+
+    - name: Validate nginx configuration inside container
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ nginx_compose_file }}"
+          - exec
+          - -T
+          - nginx
+          - nginx
+          - -t
+      changed_when: false
+
+    - name: Check for sample docker compose file
+      ansible.builtin.stat:
+        path: "{{ app_dir }}/docker-compose.yml"
+      register: docker_compose_file
+
+    - name: Create sample docker compose file if missing
+      ansible.builtin.template:
+        src: templates/docker-compose.yml.j2
+        dest: "{{ app_dir }}/docker-compose.yml"
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+        mode: "0644"
+      when: not docker_compose_file.stat.exists
+
+    - name: Print post-run summary
+      ansible.builtin.debug:
+        msg:
+          - "Deploy user: {{ deploy_user }}"
+          - "App dir: {{ app_dir }}"
+          - "App env file: {{ app_env_file }}"
+          - "Nginx dir: {{ nginx_dir }}"
+          - "Nginx compose file: {{ nginx_compose_file }}"
+          - "Domain: {{ domain }}"
+          - "Next steps:"
+          - "1. Log in as {{ deploy_user }}"
+          - "2. Put your app/docker-compose into {{ app_dir }}"
+          - "3. Make sure your app publishes {{ app_port }} on the host, for example 127.0.0.1:{{ app_port }}:80"
+          - "4. Point DNS for {{ domain }} to this server"
+          - "5. Set install_cert=true and rerun to request a certificate"

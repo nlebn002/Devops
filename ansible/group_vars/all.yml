@@ -1,0 +1,39 @@
+deploy_user: deploy
+deploy_user_home: "/home/{{ deploy_user }}"
+app_dir: /opt/myapp
+app_env_file: "{{ app_dir }}/.env.production"
+nginx_dir: /opt/nginx
+nginx_conf_dir: "{{ nginx_dir }}/conf.d"
+nginx_compose_file: "{{ nginx_dir }}/compose.yml"
+nginx_webroot_dir: "{{ nginx_dir }}/www/certbot"
+nginx_certbot_conf_dir: "{{ nginx_dir }}/certbot"
+
+domain: example.com
+app_port: "5000"
+ssh_port: "22"
+letsencrypt_email: you@example.com
+install_cert: false
+
+ssh_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC4Ibzb5HjhQUgGshGNeYZ0+VeO6sIgen6CuPuKBcDGK vbox@vbox"
+
+base_packages:
+  - ca-certificates
+  - curl
+  - gnupg
+  - lsb-release
+  - ufw
+  - git
+  - unzip
+  - openssh-server
+  - sudo
+  - fail2ban
+  - certbot
+  - apt-transport-https
+  - software-properties-common
+
+docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin

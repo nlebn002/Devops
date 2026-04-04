@@ -1,0 +1,14 @@
+services:
+  nginx:
+    image: nginx:stable-alpine
+    container_name: myapp-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - "{{ nginx_conf_dir }}:/etc/nginx/conf.d:ro"
+      - "{{ nginx_webroot_dir }}:/var/www/certbot:ro"
+      - "{{ nginx_certbot_conf_dir }}:/etc/letsencrypt:ro"

@@ -29,10 +29,14 @@ cat ~/.ssh/id_ed25519.pub
 
 ## 2. Copy the public key to the Ubuntu server
 
-Recommended method:
+Recommended method via WSL (e.g.: wsl -d Ubuntu):
 
 ```bash
 ssh-copy-id -i ~/.ssh/id_ed25519.pub user@server-ip
+```
+
+```powershell
+type C:\VMs\.ssh\vm.pub | ssh nik@192.168.0.88 "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
 ```
 
 If `ssh-copy-id` is not available, copy it manually:
@@ -133,3 +137,18 @@ If you use another port, replace `22` with the real one.
 - Only the public key goes into `authorized_keys`.
 - Always test a second SSH session before closing the first one after changing `sshd_config`.
 - Use a dedicated deploy user instead of `root`.
+
+
+## "Permissions 0777 for '/mnt/c/vms/.ssh/vm' are too open"
+Using Ansible there can be one issue regarding too pen permissions, cooy SSH private key locally int o WSL. 
+And put RW permissions. 
+
+```bash
+mkdir -p ~/.ssh
+cp /mnt/c/VMs/.ssh/vm ~/.ssh/vm
+chmod 600 ~/.ssh/vm
+```
+
+```bash
+ssh -i ~/.ssh/vm nik@192.168.0.88
+```
