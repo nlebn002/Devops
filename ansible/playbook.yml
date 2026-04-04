@@ -31,11 +31,41 @@
       changed_when: true
 
   tasks:
-    - name: Update apt cache and upgrade packages
+    - name: Find apt source definition files
+      ansible.builtin.find:
+        paths:
+          - /etc/apt
+        recurse: true
+        file_type: file
+        patterns:
+          - "*.list"
+          - "*.sources"
+      register: apt_source_files
+
+    - name: Replace Czech Ubuntu archive mirror in apt source files
+      ansible.builtin.replace:
+        path: "{{ item.path }}"
+        regexp: 'https?://cz\.archive\.ubuntu\.com/ubuntu/?'
+        replace: 'http://archive.ubuntu.com/ubuntu'
+      loop: "{{ apt_source_files.files }}"
+
+    - name: Remove cached apt package lists after mirror change
+      ansible.builtin.file:
+        path: /var/lib/apt/lists
+        state: absent
+
+    - name: Update apt cache
       ansible.builtin.apt:
         update_cache: true
-        upgrade: dist
         cache_valid_time: 3600
+      register: apt_update_result
+      retries: 5
+      delay: 20
+      until: apt_update_result is succeeded
+
+    - name: Upgrade installed packages
+      ansible.builtin.apt:
+        upgrade: dist
 
     - name: Install base packages
       ansible.builtin.apt:
@@ -199,13 +229,12 @@
       loop:
         - { path: "{{ nginx_dir }}", mode: "0755" }
         - { path: "{{ nginx_conf_dir }}", mode: "0755" }
-        - { path: "{{ nginx_webroot_dir }}", mode: "0755" }
-        - { path: "{{ nginx_certbot_conf_dir }}", mode: "0755" }
+        - { path: "{{ nginx_tls_dir }}", mode: "0700" }
 
-    - name: Check whether a LetsEncrypt certificate already exists
+    - name: Check whether the self-signed nginx certificate already exists
       ansible.builtin.stat:
-        path: "{{ nginx_certbot_conf_dir }}/live/{{ domain }}/fullchain.pem"
-      register: nginx_certificate_before
+        path: "{{ nginx_tls_dir }}/selfsigned.crt"
+      register: nginx_certificate
 
     - name: Render nginx site
       ansible.builtin.template:
@@ -214,9 +243,27 @@
         owner: root
         group: root
         mode: "0644"
-      vars:
-        nginx_tls_enabled: "{{ nginx_certificate_before.stat.exists }}"
       notify: restart nginx container
+
+    - name: Create self-signed nginx certificate for test HTTPS
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - req
+          - -x509
+          - -nodes
+          - -newkey
+          - rsa:2048
+          - -keyout
+          - "{{ nginx_tls_dir }}/selfsigned.key"
+          - -out
+          - "{{ nginx_tls_dir }}/selfsigned.crt"
+          - -days
+          - "3650"
+          - -subj
+          - /CN=localhost
+      when: not nginx_certificate.stat.exists
+      changed_when: true
 
     - name: Render nginx compose file
       ansible.builtin.template:
@@ -237,39 +284,6 @@
           - up
           - -d
       changed_when: true
-
-    - name: Issue LetsEncrypt certificate with webroot when requested
-      ansible.builtin.command:
-        argv:
-          - certbot
-          - certonly
-          - --webroot
-          - -w
-          - "{{ nginx_webroot_dir }}"
-          - --non-interactive
-          - --agree-tos
-          - -m
-          - "{{ letsencrypt_email }}"
-          - -d
-          - "{{ domain }}"
-      when: install_cert | bool
-      changed_when: true
-
-    - name: Check whether a LetsEncrypt certificate exists after certbot
-      ansible.builtin.stat:
-        path: "{{ nginx_certbot_conf_dir }}/live/{{ domain }}/fullchain.pem"
-      register: nginx_certificate_after
-
-    - name: Render nginx site after certificate step
-      ansible.builtin.template:
-        src: templates/nginx_myapp.conf.j2
-        dest: "{{ nginx_conf_dir }}/myapp.conf"
-        owner: root
-        group: root
-        mode: "0644"
-      vars:
-        nginx_tls_enabled: "{{ nginx_certificate_after.stat.exists }}"
-      notify: restart nginx container
 
     - name: Flush handlers so nginx is running with the latest config
       ansible.builtin.meta: flush_handlers
@@ -310,10 +324,9 @@
           - "App env file: {{ app_env_file }}"
           - "Nginx dir: {{ nginx_dir }}"
           - "Nginx compose file: {{ nginx_compose_file }}"
-          - "Domain: {{ domain }}"
           - "Next steps:"
           - "1. Log in as {{ deploy_user }}"
           - "2. Put your app/docker-compose into {{ app_dir }}"
           - "3. Make sure your app publishes {{ app_port }} on the host, for example 127.0.0.1:{{ app_port }}:80"
-          - "4. Point DNS for {{ domain }} to this server"
-          - "5. Set install_cert=true and rerun to request a certificate"
+          - "4. Open http://SERVER_IP and nginx will redirect to https://SERVER_IP"
+          - "5. Expect a browser warning because the certificate is self-signed for testing"

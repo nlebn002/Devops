@@ -5,14 +5,10 @@ app_env_file: "{{ app_dir }}/.env.production"
 nginx_dir: /opt/nginx
 nginx_conf_dir: "{{ nginx_dir }}/conf.d"
 nginx_compose_file: "{{ nginx_dir }}/compose.yml"
-nginx_webroot_dir: "{{ nginx_dir }}/www/certbot"
-nginx_certbot_conf_dir: "{{ nginx_dir }}/certbot"
+nginx_tls_dir: "{{ nginx_dir }}/tls"
 
-domain: example.com
 app_port: "5000"
 ssh_port: "22"
-letsencrypt_email: you@example.com
-install_cert: false
 
 ssh_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC4Ibzb5HjhQUgGshGNeYZ0+VeO6sIgen6CuPuKBcDGK vbox@vbox"
 
@@ -25,9 +21,9 @@ base_packages:
   - git
   - unzip
   - openssh-server
+  - openssl
   - sudo
   - fail2ban
-  - certbot
   - apt-transport-https
   - software-properties-common
 

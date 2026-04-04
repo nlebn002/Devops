@@ -1,7 +1,7 @@
 services:
-  app:
-    image: nginx:alpine
-    container_name: myapp
+  hello-world:
+    image: nginxdemos/hello
+    container_name: hello-world
     restart: unless-stopped
     ports:
       - "127.0.0.1:5000:80"
